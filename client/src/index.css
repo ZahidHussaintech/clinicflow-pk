@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@layer base {
+  html, body, #root {
+    max-width: 100%;
+    overflow-x: hidden;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  h1, h2, h3, h4 {
+    font-family: 'Plus Jakarta Sans', 'Inter', sans-serif;
+  }
+}
+
+@media print {
+  body * { visibility: hidden; }
+  #thermal-slip-print, #thermal-slip-print * { visibility: visible; }
+  #thermal-slip-print {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 58mm;
+    padding: 4mm;
+    background: #ffffff;
+    color: #000000;
+  }
+}

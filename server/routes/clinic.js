@@ -1,0 +1,149 @@
+import express from 'express';
+import PatientToken from '../models/PatientToken.js';
+import DispensaryItem from '../models/DispensaryItem.js';
+import ClinicUser from '../models/ClinicUser.js';
+import { requireClinicAuth } from '../middleware/auth.js';
+
+const router = express.Router();
+
+function getTodayPKT() {
+  const pkt = new Date(Date.now() + 5 * 60 * 60 * 1000);
+  return pkt.toISOString().slice(0, 10);
+}
+
+router.get('/today', requireClinicAuth, async (req, res) => {
+  try {
+    const dateKey = req.query.date || getTodayPKT();
+    const tokens = await PatientToken.find({ clinicId: req.clinicId, dateKey }).sort({ tokenNumber: 1 });
+
+    const totalPatients = tokens.length;
+    const waitingCount = tokens.filter((t) => t.status === 'Waiting').length;
+    const completedCount = tokens.filter((t) => t.status === 'Completed').length;
+    const totalConsultationRs = tokens.reduce((sum, t) => sum + (t.consultationFeeRs || 0), 0);
+    const totalProcedureRs = tokens.reduce((sum, t) => sum + (t.procedureFeeRs || 0), 0);
+    const grandTotalRs = totalConsultationRs + totalProcedureRs;
+
+    res.json({
+      dateKey,
+      tokens,
+      summary: {
+        totalPatients,
+        waitingCount,
+        completedCount,
+        totalConsultationRs,
+        totalProcedureRs,
+        grandTotalRs,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to load today queue.', error: err.message });
+  }
+});
+
+router.post('/tokens', requireClinicAuth, async (req, res) => {
+  try {
+    const {
+      patientName,
+      patientPhone,
+      ageGender,
+      complaint,
+      consultationFeeRs,
+      procedureFeeRs,
+      procedureNote,
+    } = req.body;
+
+    if (!patientName || !patientPhone) {
+      return res.status(400).json({ message: 'Patient name and mobile number are required.' });
+    }
+
+    const dateKey = getTodayPKT();
+    const lastToken = await PatientToken.findOne({ clinicId: req.clinicId, dateKey }).sort({ tokenNumber: -1 });
+    const nextNumber = lastToken ? lastToken.tokenNumber + 1 : 1;
+
+    const clinic = await ClinicUser.findById(req.clinicId);
+    const fee = consultationFeeRs !== undefined ? Number(consultationFeeRs) : clinic?.defaultFeeRs ?? 400;
+
+    const created = await PatientToken.create({
+      clinicId: req.clinicId,
+      dateKey,
+      tokenNumber: nextNumber,
+      patientName: patientName.trim(),
+      patientPhone: patientPhone.replace(/\s+/g, ''),
+      ageGender: ageGender || '',
+      complaint: complaint || 'General Checkup',
+      consultationFeeRs: fee,
+      procedureFeeRs: Number(procedureFeeRs) || 0,
+      procedureNote: procedureNote || '',
+    });
+
+    res.status(201).json(created);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to issue token.', error: err.message });
+  }
+});
+
+router.put('/tokens/:id', requireClinicAuth, async (req, res) => {
+  try {
+    const updated = await PatientToken.findOneAndUpdate(
+      { _id: req.params.id, clinicId: req.clinicId },
+      req.body,
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ message: 'Token not found.' });
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update patient record.' });
+  }
+});
+
+router.get('/history/:phone', requireClinicAuth, async (req, res) => {
+  try {
+    const cleanPhone = req.params.phone.replace(/\s+/g, '');
+    const visits = await PatientToken.find({
+      clinicId: req.clinicId,
+      patientPhone: { $regex: cleanPhone.slice(-10) },
+    })
+      .sort({ createdAt: -1 })
+      .limit(15);
+
+    res.json({ phone: cleanPhone, visits });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to fetch patient history.' });
+  }
+});
+
+router.get('/dispensary', requireClinicAuth, async (req, res) => {
+  try {
+    const items = await DispensaryItem.find({ clinicId: req.clinicId }).sort({ stockQty: 1 });
+    res.json(items);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to load dispensary stock.' });
+  }
+});
+
+router.post('/dispensary', requireClinicAuth, async (req, res) => {
+  try {
+    const created = await DispensaryItem.create({
+      clinicId: req.clinicId,
+      ...req.body,
+    });
+    res.status(201).json(created);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to add dispensary item.' });
+  }
+});
+
+router.put('/dispensary/:id', requireClinicAuth, async (req, res) => {
+  try {
+    const updated = await DispensaryItem.findOneAndUpdate(
+      { _id: req.params.id, clinicId: req.clinicId },
+      req.body,
+      { new: true }
+    );
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to update stock.' });
+  }
+});
+
+export default router;

@@ -1,0 +1,18 @@
+{
+  "name": "ClinicFlow PK — Digital Parchi & Clinic Manager",
+  "short_name": "ClinicFlow PK",
+  "description": "Zero-laptop digital token, patient history, WhatsApp slips & nightly cash closing for Karachi clinics.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#0F766E",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/images/doctor-avatar.webp",
+      "sizes": "400x400",
+      "type": "image/webp",
+      "purpose": "any maskable"
+    }
+  ]
+}
