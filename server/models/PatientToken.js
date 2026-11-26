@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const patientTokenSchema = new mongoose.Schema(
   {
     clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'ClinicUser', required: true, index: true },
-    dateKey: { type: String, required: true, index: true }, // YYYY-MM-DD (PKT)
+    dateKey: { type: String, required: true, index: true },
     tokenNumber: { type: Number, required: true },
     patientName: { type: String, required: true, trim: true },
     patientPhone: { type: String, required: true, trim: true, index: true },
@@ -22,9 +22,10 @@ const patientTokenSchema = new mongoose.Schema(
     },
     diagnosis: { type: String, default: '' },
     prescription: { type: [String], default: [] },
+    dispensedItemIds: { type: [String], default: [] },
     followUpDays: { type: Number, default: 0 },
     consultationFeeRs: { type: Number, default: 400, min: 0 },
-    procedureFeeRs: { type: Number, default: 0, min: 0 }, // Injection / Drip / Nebulizer
+    procedureFeeRs: { type: Number, default: 0, min: 0 },
     procedureNote: { type: String, default: '' },
     paymentCollected: { type: Boolean, default: true },
   },

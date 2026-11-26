@@ -84,12 +84,28 @@ router.post('/tokens', requireClinicAuth, async (req, res) => {
 
 router.put('/tokens/:id', requireClinicAuth, async (req, res) => {
   try {
+    const existing = await PatientToken.findOne({ _id: req.params.id, clinicId: req.clinicId });
+    if (!existing) return res.status(404).json({ message: 'Token not found.' });
+
+    const incomingIds = Array.isArray(req.body.dispensedItemIds) ? req.body.dispensedItemIds : [];
+    const alreadyDeducted = Array.isArray(existing.dispensedItemIds) ? existing.dispensedItemIds : [];
+
+    // Only deduct items that were newly added to this visit
+    const newlyAddedIds = incomingIds.filter((id) => !alreadyDeducted.includes(id));
+    for (const itemId of newlyAddedIds) {
+      await DispensaryItem.findOneAndUpdate(
+        { _id: itemId, clinicId: req.clinicId, stockQty: { $gt: 0 } },
+        { $inc: { stockQty: -1 } }
+      );
+    }
+
+    const mergedIds = Array.from(new Set([...alreadyDeducted, ...incomingIds]));
     const updated = await PatientToken.findOneAndUpdate(
       { _id: req.params.id, clinicId: req.clinicId },
-      req.body,
+      { ...req.body, dispensedItemIds: mergedIds },
       { new: true }
     );
-    if (!updated) return res.status(404).json({ message: 'Token not found.' });
+
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: 'Failed to update patient record.' });

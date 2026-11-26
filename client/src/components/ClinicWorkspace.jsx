@@ -29,27 +29,52 @@ const QUICK_COMPLAINTS = [
   'Injection / Drip',
 ];
 
-const CLEAN_MEDICINE_NAMES = [
-  'Tab. Panadol 500mg',
-  'Cap. Amoxil 500mg',
-  'Tab. Brufen 400mg',
-  'Tab. Caflam 50mg',
-  'Syp. Calpol 120mg',
-  'Tab. Risek 20mg',
+const QUICK_OUTSIDE_MEDS = [
   'Tab. Augmentin 625mg',
-  'Inj. Voren 75mg IM',
-  'Normal Saline Drip 500ml',
+  'Tab. Panadol 500mg',
+  'Cap. Risek 20mg',
+  'Syp. Brufen',
+  'Tab. Rigix 10mg',
 ];
 
-const DOSAGE_SCHEDULES = [
+const TIMING_OPTIONS = [
   { id: '1+0+1', label: 'صبح شام (1+0+1)' },
-  { id: '1+1+1', label: 'صبح دوپہر شام (1+1+1)' },
+  { id: '1+1+1', label: 'تینوں ٹائم (1+1+1)' },
   { id: '1+0+0', label: 'صرف صبح (1+0+0)' },
   { id: '0+0+1', label: 'صرف رات (0+0+1)' },
-  { id: 'After Meal', label: 'کھانے کے بعد' },
-  { id: 'Before Meal', label: 'کھانے سے پہلے' },
   { id: 'Stat', label: 'فوری / Stat' },
 ];
+
+const MEAL_OPTIONS = [
+  { id: 'after', label: 'کھانے کے بعد' },
+  { id: 'empty', label: 'خالی پیٹ' },
+  { id: 'before', label: 'کھانے سے پہلے' },
+];
+
+function parseRxLineToRow(line, idx) {
+  const parts = line.split('•').map((s) => s.trim());
+  if (parts.length >= 4) {
+    const daysNum = parseInt(parts[3], 10) || 3;
+    return {
+      uid: `saved-${idx}-${Date.now()}`,
+      name: parts[0],
+      timing: parts[1],
+      meal: parts[2],
+      days: daysNum,
+      stockItemId: null,
+      source: 'Saved',
+    };
+  }
+  return {
+    uid: `saved-${idx}-${Date.now()}`,
+    name: line,
+    timing: 'صبح شام (1+0+1)',
+    meal: 'کھانے کے بعد',
+    days: 3,
+    stockItemId: null,
+    source: 'Saved',
+  };
+}
 
 export default function ClinicWorkspace({ clinic, onLogout }) {
   const [tab, setTab] = useState('counter');
@@ -77,28 +102,24 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     procedureFeeRs: 0,
     procedureNote: '',
   });
-  const [activeMicField, setActiveMicField] = useState(''); // 'patientName' | 'diagnosis' | 'customMed' | ''
+  const [activeMicField, setActiveMicField] = useState('');
   const [printToken, setPrintToken] = useState(null);
 
-  // Doctor Quick Rx & History State
+  // Doctor Quick Rx & Multi-Row Prescription State
   const [selectedTokenId, setSelectedTokenId] = useState('');
   const [historyPhone, setHistoryPhone] = useState('');
   const [patientHistory, setPatientHistory] = useState([]);
-  const [rxForm, setRxForm] = useState({
+  const [vitalsAndDx, setVitalsAndDx] = useState({
     bp: '',
     temp: '',
     sugar: '',
     weight: '',
     diagnosis: '',
-    prescription: [],
-    followUpDays: 3,
   });
 
-  // Modular Medicine Builder State
-  const [selectedMedName, setSelectedMedName] = useState('Tab. Panadol 500mg');
-  const [customMedInput, setCustomMedInput] = useState('');
-  const [selectedTiming, setSelectedTiming] = useState('صبح شام (1+0+1)');
-  const [medDays, setMedDays] = useState(3);
+  // Array of independent medicine rows: { uid, name, timing, meal, days, stockItemId, source }
+  const [rxRows, setRxRows] = useState([]);
+  const [outsideMedInput, setOutsideMedInput] = useState('');
 
   const [savingRx, setSavingRx] = useState(false);
   const [rxSavedSuccess, setRxSavedSuccess] = useState(false);
@@ -171,7 +192,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
   const startVoiceInput = (field) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert('Voice typing works best in Google Chrome on Android or Desktop.');
+      alert('Voice typing works in Google Chrome on Android or Desktop.');
       return;
     }
     const recognition = new SpeechRecognition();
@@ -183,13 +204,12 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
       if (field === 'patientName') {
         setTokenForm((prev) => ({ ...prev, patientName: spoken }));
       } else if (field === 'diagnosis') {
-        setRxForm((prev) => ({
+        setVitalsAndDx((prev) => ({
           ...prev,
           diagnosis: prev.diagnosis ? `${prev.diagnosis}, ${spoken}` : spoken,
         }));
-      } else if (field === 'customMed') {
-        setCustomMedInput(spoken);
-        setSelectedMedName('');
+      } else if (field === 'outsideMed') {
+        setOutsideMedInput(spoken);
       }
       setActiveMicField('');
     };
@@ -238,15 +258,15 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
   const selectPatientForDoctor = async (tok) => {
     setSelectedTokenId(tok._id);
     setRxSavedSuccess(false);
-    setRxForm({
+    setVitalsAndDx({
       bp: tok.vitals?.bp || '',
       temp: tok.vitals?.temp || '',
       sugar: tok.vitals?.sugar || '',
       weight: tok.vitals?.weight || '',
       diagnosis: tok.diagnosis || '',
-      prescription: tok.prescription || [],
-      followUpDays: tok.followUpDays || 3,
     });
+    const parsedRows = (tok.prescription || []).map((line, idx) => parseRxLineToRow(line, idx));
+    setRxRows(parsedRows);
     setHistoryPhone(tok.patientPhone);
     try {
       const { data } = await API.get(`/clinic/history/${tok.patientPhone}`);
@@ -265,44 +285,77 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     } catch (_) {}
   };
 
-  const handleAddBuiltMedicine = () => {
-    const medBase = customMedInput.trim() || selectedMedName;
-    if (!medBase) return;
-    const formattedLine = `${medBase} — ${selectedTiming} — ${medDays} ${
-      medDays === 1 ? 'Day' : 'Days'
-    }`;
-    setRxForm((prev) => ({
+  // Add a medicine from Clinic Dispensary Stock (will auto-deduct on Save)
+  const addClinicStockMedRow = (item) => {
+    setRxRows((prev) => [
       ...prev,
-      prescription: [...prev.prescription, formattedLine],
-    }));
-    setCustomMedInput('');
+      {
+        uid: `row-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: item.itemName,
+        timing: 'صبح شام (1+0+1)',
+        meal: 'کھانے کے بعد',
+        days: 3,
+        stockItemId: item._id,
+        source: 'Clinic Stock',
+      },
+    ]);
     setRxSavedSuccess(false);
   };
 
-  const removePrescriptionItem = (idx) => {
-    setRxForm((prev) => ({
+  // Add an outside medical store medicine (does not touch clinic stock)
+  const addOutsideMedRow = (medName) => {
+    const clean = (medName || outsideMedInput).trim();
+    if (!clean) return;
+    setRxRows((prev) => [
       ...prev,
-      prescription: prev.prescription.filter((_, i) => i !== idx),
-    }));
+      {
+        uid: `row-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: clean,
+        timing: 'صبح شام (1+0+1)',
+        meal: 'کھانے کے بعد',
+        days: 3,
+        stockItemId: null,
+        source: 'Outside Store',
+      },
+    ]);
+    if (!medName) setOutsideMedInput('');
     setRxSavedSuccess(false);
   };
+
+  const updateRxRow = (uid, patch) => {
+    setRxRows((prev) => prev.map((r) => (r.uid === uid ? { ...r, ...patch } : r)));
+    setRxSavedSuccess(false);
+  };
+
+  const removeRxRow = (uid) => {
+    setRxRows((prev) => prev.filter((r) => r.uid !== uid));
+    setRxSavedSuccess(false);
+  };
+
+  const formatRxRowText = (r) =>
+    `${r.name} • ${r.timing} • ${r.meal} • ${r.days} ${r.days === 1 ? 'Day' : 'Days'}`;
 
   const handleSaveDoctorRx = async () => {
     if (!selectedTokenId) return;
     setSavingRx(true);
     setRxSavedSuccess(false);
     try {
+      const formattedPrescription = rxRows.map(formatRxRowText);
+      const dispensedItemIds = rxRows
+        .filter((r) => Boolean(r.stockItemId))
+        .map((r) => r.stockItemId);
+
       const { data: updatedToken } = await API.put(`/clinic/tokens/${selectedTokenId}`, {
         status: 'Completed',
         vitals: {
-          bp: rxForm.bp,
-          temp: rxForm.temp,
-          sugar: rxForm.sugar,
-          weight: rxForm.weight,
+          bp: vitalsAndDx.bp,
+          temp: vitalsAndDx.temp,
+          sugar: vitalsAndDx.sugar,
+          weight: vitalsAndDx.weight,
         },
-        diagnosis: rxForm.diagnosis,
-        prescription: rxForm.prescription,
-        followUpDays: Number(rxForm.followUpDays) || 0,
+        diagnosis: vitalsAndDx.diagnosis,
+        prescription: formattedPrescription,
+        dispensedItemIds,
       });
 
       setTokens((prev) =>
@@ -315,7 +368,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
       }
 
       setRxSavedSuccess(true);
-      refreshAll();
+      await refreshAll();
     } catch (err) {
       alert(err.response?.data?.message || 'Could not save visit. Please check connection.');
     } finally {
@@ -337,12 +390,12 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     let digits = (tok.patientPhone || '').replace(/\D/g, '');
     if (digits.startsWith('0')) digits = `92${digits.slice(1)}`;
     const medsList =
-      rxForm.prescription.length > 0
-        ? rxForm.prescription.map((m, i) => `${i + 1}. ${m}`).join('\n')
+      rxRows.length > 0
+        ? rxRows.map((r, i) => `${i + 1}. ${formatRxRowText(r)}`).join('\n')
         : 'Follow doctor advice.';
     const text = `Assalam-o-Alaikum ${tok.patientName},\n*${clinic.clinicName}* (${clinic.doctorName})\n${
-      rxForm.diagnosis ? `Diagnosis: ${rxForm.diagnosis}\n` : ''
-    }*Prescription / دوائیاں:*\n${medsList}\nFollow-up after ${medDays} days.`;
+      vitalsAndDx.diagnosis ? `Diagnosis: ${vitalsAndDx.diagnosis}\n` : ''
+    }*Prescription / دوائیاں:*\n${medsList}`;
     return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
   };
 
@@ -388,7 +441,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 pb-24">
       {/* Top Clinical Bar */}
       <header className="sticky top-0 z-30 bg-white border-b border-slate-200 px-4 py-3">
-        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-lg font-extrabold text-slate-900 truncate">
@@ -429,7 +482,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
       </header>
 
       {/* Main Content Container */}
-      <main className="max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
+      <main className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
         {/* TAB 1: COUNTER TOKEN & PARCHI GENERATOR */}
         {tab === 'counter' && (
           <div className="grid lg:grid-cols-12 gap-6">
@@ -645,10 +698,10 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
           </div>
         )}
 
-        {/* TAB 2: DOCTOR QUICK RX & INSTANT MOBILE HISTORY */}
+        {/* TAB 2: DOCTOR MULTI-MEDICINE PARCHI & AUTO STOCK DEDUCTION */}
         {tab === 'doctor' && (
           <div className="grid lg:grid-cols-12 gap-6">
-            <div className="lg:col-span-7 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="lg:col-span-8 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                 <div>
                   <span className="text-[11px] font-bold uppercase text-teal-700">
@@ -683,29 +736,29 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                 <input
                   type="text"
                   placeholder="BP (120/80)"
-                  value={rxForm.bp}
-                  onChange={(e) => setRxForm({ ...rxForm, bp: e.target.value })}
+                  value={vitalsAndDx.bp}
+                  onChange={(e) => setVitalsAndDx({ ...vitalsAndDx, bp: e.target.value })}
                   className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-300 text-xs"
                 />
                 <input
                   type="text"
                   placeholder="Temp (99°F)"
-                  value={rxForm.temp}
-                  onChange={(e) => setRxForm({ ...rxForm, temp: e.target.value })}
+                  value={vitalsAndDx.temp}
+                  onChange={(e) => setVitalsAndDx({ ...vitalsAndDx, temp: e.target.value })}
                   className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-300 text-xs"
                 />
                 <input
                   type="text"
                   placeholder="Sugar (110)"
-                  value={rxForm.sugar}
-                  onChange={(e) => setRxForm({ ...rxForm, sugar: e.target.value })}
+                  value={vitalsAndDx.sugar}
+                  onChange={(e) => setVitalsAndDx({ ...vitalsAndDx, sugar: e.target.value })}
                   className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-300 text-xs"
                 />
                 <input
                   type="text"
                   placeholder="Weight (kg)"
-                  value={rxForm.weight}
-                  onChange={(e) => setRxForm({ ...rxForm, weight: e.target.value })}
+                  value={vitalsAndDx.weight}
+                  onChange={(e) => setVitalsAndDx({ ...vitalsAndDx, weight: e.target.value })}
                   className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-300 text-xs"
                 />
               </div>
@@ -714,9 +767,9 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
               <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder="Diagnosis / Clinical Note (e.g. Viral Fever & Throat)"
-                  value={rxForm.diagnosis}
-                  onChange={(e) => setRxForm({ ...rxForm, diagnosis: e.target.value })}
+                  placeholder="Diagnosis / مرض کی تفصیل (e.g. Acute Viral Fever)"
+                  value={vitalsAndDx.diagnosis}
+                  onChange={(e) => setVitalsAndDx({ ...vitalsAndDx, diagnosis: e.target.value })}
                   className="flex-1 h-11 px-3.5 rounded-xl bg-slate-50 border border-slate-300 text-sm"
                 />
                 <button
@@ -733,149 +786,214 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                 </button>
               </div>
 
-              {/* STEP A: Clean Medicine Name Selection */}
-              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                <div className="text-xs font-bold text-slate-800">
-                  1. Select Medicine Name / دوا کا نام منتخب کریں:
+              {/* SECTION 1: CLINIC DISPENSARY STOCK MEDICINES (AUTO-DEDUCTS ON SAVE) */}
+              <div className="p-3.5 rounded-2xl bg-teal-50/50 border border-teal-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-teal-900">
+                    1. Dawakhana Stock Medicines (Tap to Add — Auto Stock Less):
+                  </span>
+                  <span className="text-[10px] font-bold text-teal-700">Live Inventory</span>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {CLEAN_MEDICINE_NAMES.map((med) => {
-                    const isPicked = selectedMedName === med && !customMedInput;
-                    return (
-                      <button
-                        key={med}
-                        type="button"
-                        onClick={() => {
-                          setSelectedMedName(med);
-                          setCustomMedInput('');
-                        }}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
-                          isPicked
-                            ? 'bg-teal-700 text-white border-teal-700'
-                            : 'bg-white text-slate-700 border-slate-200 hover:border-teal-500'
+                  {stockItems.map((item) => (
+                    <button
+                      key={item._id}
+                      type="button"
+                      disabled={item.stockQty <= 0}
+                      onClick={() => addClinicStockMedRow(item)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center gap-1.5 ${
+                        item.stockQty <= 0
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                          : 'bg-white hover:bg-teal-700 hover:text-white text-slate-800 border-teal-300'
+                      }`}
+                    >
+                      <span>+ {item.itemName}</span>
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] tabular-nums ${
+                          item.stockQty <= item.lowStockThreshold
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-slate-100 text-slate-600'
                         }`}
                       >
-                        {med}
-                      </button>
-                    );
-                  })}
+                        {item.stockQty}
+                      </span>
+                    </button>
+                  ))}
                 </div>
+              </div>
 
-                {/* Custom Medicine + Mic */}
+              {/* SECTION 2: OUTSIDE MEDICAL STORE MEDICINES */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5">
+                <div className="text-xs font-extrabold text-slate-800">
+                  2. Bahar Medical Store Ki Dawa (Outside Rx):
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {QUICK_OUTSIDE_MEDS.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => addOutsideMedRow(m)}
+                      className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-900 hover:text-white border border-slate-300 text-xs font-medium text-slate-700 transition cursor-pointer"
+                    >
+                      + {m}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    placeholder="Or type / speak any other medicine name..."
-                    value={customMedInput}
-                    onChange={(e) => setCustomMedInput(e.target.value)}
+                    placeholder="Type or speak any outside medicine name..."
+                    value={outsideMedInput}
+                    onChange={(e) => setOutsideMedInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addOutsideMedRow();
+                      }
+                    }}
                     className="flex-1 h-10 px-3 rounded-xl bg-white border border-slate-300 text-xs"
                   />
                   <button
                     type="button"
-                    onClick={() => startVoiceInput('customMed')}
+                    onClick={() => startVoiceInput('outsideMed')}
                     title="Speak Medicine Name"
                     className={`px-3 rounded-xl border flex items-center justify-center cursor-pointer ${
-                      activeMicField === 'customMed'
+                      activeMicField === 'outsideMed'
                         ? 'bg-red-600 text-white border-red-600 animate-pulse'
                         : 'bg-white text-teal-800 border-slate-300'
                     }`}
                   >
                     <Mic className="w-4 h-4" />
                   </button>
-                </div>
-
-                {/* STEP B: Timing / Khurak Filter Buttons */}
-                <div className="pt-1">
-                  <div className="text-xs font-bold text-slate-800 mb-1.5">
-                    2. Khurak / Timing (خوراک):
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {DOSAGE_SCHEDULES.map((sch) => (
-                      <button
-                        key={sch.id}
-                        type="button"
-                        onClick={() => setSelectedTiming(sch.label)}
-                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
-                          selectedTiming === sch.label
-                            ? 'bg-amber-600 text-white border-amber-600'
-                            : 'bg-white text-slate-700 border-slate-200'
-                        }`}
-                      >
-                        {sch.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* STEP C: - Day + Counter & Add Button */}
-                <div className="pt-1 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-slate-800">3. Days (دن):</span>
-                    <div className="inline-flex items-center bg-white border border-slate-300 rounded-xl overflow-hidden">
-                      <button
-                        type="button"
-                        onClick={() => setMedDays((d) => Math.max(1, d - 1))}
-                        className="w-9 h-9 font-extrabold text-base text-slate-700 hover:bg-slate-100 cursor-pointer"
-                      >
-                        -
-                      </button>
-                      <span className="px-3 text-xs font-extrabold text-teal-800 tabular-nums">
-                        {medDays} {medDays === 1 ? 'Day' : 'Days'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setMedDays((d) => d + 1)}
-                        className="w-9 h-9 font-extrabold text-base text-teal-700 hover:bg-teal-50 cursor-pointer"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-
                   <button
                     type="button"
-                    onClick={handleAddBuiltMedicine}
-                    className="px-4 h-10 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    onClick={() => addOutsideMedRow()}
+                    className="px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
                   >
-                    <Plus className="w-4 h-4" /> Add Medicine to Parchi
+                    + Add
                   </button>
                 </div>
               </div>
 
-              {/* Selected Prescription Box */}
-              {rxForm.prescription.length > 0 && (
-                <div className="p-3.5 rounded-xl bg-teal-50/80 border border-teal-200 space-y-2">
-                  <div className="text-[11px] font-bold text-teal-900 uppercase">
-                    Selected Prescription ({rxForm.prescription.length}):
-                  </div>
-                  {rxForm.prescription.map((m, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center justify-between gap-2 text-xs text-slate-800 bg-white/80 px-2.5 py-1.5 rounded-lg"
-                    >
-                      <span>
-                        <strong>{i + 1}.</strong> {m}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => removePrescriptionItem(i)}
-                        className="text-red-600 hover:text-red-800 p-0.5 cursor-pointer"
-                        title="Remove"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Visible Saved Confirmation Banner */}
-              {rxSavedSuccess && (
-                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center justify-between">
-                  <span className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    Saved! Visit &amp; medicines are permanently stored in Patient History.
+              {/* SECTION 3: MULTI-ROW PARCHI (EVERY MEDICINE HAS ITS OWN TIMING, MEAL & DAYS CONTROLS) */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold uppercase tracking-wide text-slate-800">
+                    Active Parchi Medicines ({rxRows.length}) — Set Timing, Meal &amp; Days Per Medicine:
                   </span>
+                </div>
+
+                {rxRows.length === 0 ? (
+                  <div className="p-5 rounded-2xl border border-dashed border-slate-300 text-center text-xs text-slate-500">
+                    Tap any medicine above (from Clinic Stock or Outside Store). Every selected medicine opens its own timing, empty/after-meal, and day counter row here.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {rxRows.map((row, idx) => (
+                      <div
+                        key={row.uid}
+                        className="p-3.5 rounded-2xl bg-white border-2 border-slate-200 shadow-2xs space-y-2.5"
+                      >
+                        {/* Row Header: Number + Medicine Name + Source Badge + Remove */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="w-6 h-6 rounded-full bg-teal-700 text-white text-xs font-bold flex items-center justify-center">
+                              {idx + 1}
+                            </span>
+                            <span className="font-extrabold text-sm text-slate-900">
+                              {row.name}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                row.stockItemId
+                                  ? 'bg-teal-50 text-teal-800 border border-teal-200'
+                                  : 'bg-amber-50 text-amber-800 border border-amber-200'
+                              }`}
+                            >
+                              {row.stockItemId ? 'Clinic Stock (-1)' : row.source}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeRxRow(row.uid)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 cursor-pointer"
+                            title="Remove Medicine"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {/* Timing Pills (Subha Sham / Teeno Time / Subha / Raat) */}
+                        <div className="flex flex-wrap gap-1.5">
+                          {TIMING_OPTIONS.map((tOpt) => (
+                            <button
+                              key={tOpt.id}
+                              type="button"
+                              onClick={() => updateRxRow(row.uid, { timing: tOpt.label })}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                                row.timing === tOpt.label
+                                  ? 'bg-teal-700 text-white border-teal-700'
+                                  : 'bg-slate-50 text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {tOpt.label}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Meal Pills (Khali Pait / Khane Ke Baad) + Day Counter */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                          <div className="flex flex-wrap gap-1.5">
+                            {MEAL_OPTIONS.map((mOpt) => (
+                              <button
+                                key={mOpt.id}
+                                type="button"
+                                onClick={() => updateRxRow(row.uid, { meal: mOpt.label })}
+                                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                                  row.meal === mOpt.label
+                                    ? 'bg-amber-600 text-white border-amber-600'
+                                    : 'bg-slate-50 text-slate-700 border-slate-200'
+                                }`}
+                              >
+                                {mOpt.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* - Day + Counter */}
+                          <div className="inline-flex items-center bg-slate-50 border border-slate-300 rounded-xl overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateRxRow(row.uid, { days: Math.max(1, row.days - 1) })
+                              }
+                              className="w-8 h-8 font-extrabold text-sm text-slate-700 hover:bg-slate-200 cursor-pointer"
+                            >
+                              -
+                            </button>
+                            <span className="px-2.5 text-xs font-extrabold text-teal-800 tabular-nums">
+                              {row.days} {row.days === 1 ? 'Day' : 'Days'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => updateRxRow(row.uid, { days: row.days + 1 })}
+                              className="w-8 h-8 font-extrabold text-sm text-teal-700 hover:bg-teal-100 cursor-pointer"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Saved Confirmation Banner */}
+              {rxSavedSuccess && (
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  Saved! Prescription recorded in Patient History &amp; clinic stock automatically updated.
                 </div>
               )}
 
@@ -884,7 +1002,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                   type="button"
                   disabled={savingRx || !selectedTokenId}
                   onClick={handleSaveDoctorRx}
-                  className={`flex-1 h-11 rounded-xl text-white font-bold text-sm flex items-center justify-center gap-2 transition cursor-pointer ${
+                  className={`flex-1 h-12 rounded-xl text-white font-bold text-sm flex items-center justify-center gap-2 transition cursor-pointer ${
                     rxSavedSuccess
                       ? 'bg-emerald-600 hover:bg-emerald-700'
                       : 'bg-teal-700 hover:bg-teal-800'
@@ -892,7 +1010,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   {savingRx
-                    ? 'Saving Visit...'
+                    ? 'Saving & Updating Stock...'
                     : rxSavedSuccess
                     ? 'Saved to History ✓'
                     : 'Complete Visit & Save to History'}
@@ -903,7 +1021,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                     href={buildWhatsAppRxUrl(activePatientToken)}
                     target="_blank"
                     rel="noreferrer"
-                    className="h-11 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5"
+                    className="h-12 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5"
                   >
                     <MessageCircle className="w-4 h-4" /> Send Rx on WhatsApp
                   </a>
@@ -912,7 +1030,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
             </div>
 
             {/* Right Column: Instant Mobile Number History Lookup */}
-            <div className="lg:col-span-5 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="lg:col-span-4 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
               <div>
                 <span className="text-[11px] font-bold uppercase text-amber-700">
                   Zero Lost Parchi
@@ -938,7 +1056,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                 </button>
               </form>
 
-              <div className="space-y-3 max-h-[460px] overflow-y-auto">
+              <div className="space-y-3 max-h-[560px] overflow-y-auto">
                 {patientHistory.length === 0 ? (
                   <p className="text-xs text-slate-500 py-6 text-center">
                     No prior visits found for this number yet. Completed visits appear here automatically.
@@ -974,7 +1092,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                         <div className="font-semibold text-slate-800">Dx: {v.diagnosis}</div>
                       )}
                       {v.prescription?.length > 0 ? (
-                        <ul className="list-disc list-inside text-[11px] text-slate-700 pt-1 border-t border-slate-200/80">
+                        <ul className="list-disc list-inside text-[11px] text-slate-700 pt-1 border-t border-slate-200/80 space-y-1">
                           {v.prescription.map((med, idx) => (
                             <li key={idx}>{med}</li>
                           ))}
