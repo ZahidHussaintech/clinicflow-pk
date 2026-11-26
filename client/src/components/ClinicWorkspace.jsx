@@ -14,8 +14,9 @@ import {
   Wifi,
   WifiOff,
   AlertTriangle,
-  Clock,
   RefreshCw,
+  Trash2,
+  X,
 } from 'lucide-react';
 import API from '../api';
 
@@ -28,8 +29,30 @@ const QUICK_COMPLAINTS = [
   'Injection / Drip',
 ];
 
+const CLEAN_MEDICINE_NAMES = [
+  'Tab. Panadol 500mg',
+  'Cap. Amoxil 500mg',
+  'Tab. Brufen 400mg',
+  'Tab. Caflam 50mg',
+  'Syp. Calpol 120mg',
+  'Tab. Risek 20mg',
+  'Tab. Augmentin 625mg',
+  'Inj. Voren 75mg IM',
+  'Normal Saline Drip 500ml',
+];
+
+const DOSAGE_SCHEDULES = [
+  { id: '1+0+1', label: 'صبح شام (1+0+1)' },
+  { id: '1+1+1', label: 'صبح دوپہر شام (1+1+1)' },
+  { id: '1+0+0', label: 'صرف صبح (1+0+0)' },
+  { id: '0+0+1', label: 'صرف رات (0+0+1)' },
+  { id: 'After Meal', label: 'کھانے کے بعد' },
+  { id: 'Before Meal', label: 'کھانے سے پہلے' },
+  { id: 'Stat', label: 'فوری / Stat' },
+];
+
 export default function ClinicWorkspace({ clinic, onLogout }) {
-  const [tab, setTab] = useState('counter'); // 'counter' | 'doctor' | 'closing' | 'stock'
+  const [tab, setTab] = useState('counter');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [loading, setLoading] = useState(false);
 
@@ -54,7 +77,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     procedureFeeRs: 0,
     procedureNote: '',
   });
-  const [listeningVoice, setListeningVoice] = useState(false);
+  const [activeMicField, setActiveMicField] = useState(''); // 'patientName' | 'diagnosis' | 'customMed' | ''
   const [printToken, setPrintToken] = useState(null);
 
   // Doctor Quick Rx & History State
@@ -68,10 +91,17 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     weight: '',
     diagnosis: '',
     prescription: [],
-    followUpDays: 5,
+    followUpDays: 3,
   });
-  const [customMed, setCustomMed] = useState('');
+
+  // Modular Medicine Builder State
+  const [selectedMedName, setSelectedMedName] = useState('Tab. Panadol 500mg');
+  const [customMedInput, setCustomMedInput] = useState('');
+  const [selectedTiming, setSelectedTiming] = useState('صبح شام (1+0+1)');
+  const [medDays, setMedDays] = useState(3);
+
   const [savingRx, setSavingRx] = useState(false);
+  const [rxSavedSuccess, setRxSavedSuccess] = useState(false);
 
   // Dispensary Add Form
   const [newStock, setNewStock] = useState({
@@ -138,23 +168,33 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     }
   };
 
-  const startVoiceNameInput = () => {
+  const startVoiceInput = (field) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert('Voice typing is supported in Chrome on Android.');
+      alert('Voice typing works best in Google Chrome on Android or Desktop.');
       return;
     }
     const recognition = new SpeechRecognition();
     recognition.lang = 'en-PK';
     recognition.interimResults = false;
-    setListeningVoice(true);
+    setActiveMicField(field);
     recognition.onresult = (event) => {
       const spoken = event.results[0][0].transcript;
-      setTokenForm((prev) => ({ ...prev, patientName: spoken }));
-      setListeningVoice(false);
+      if (field === 'patientName') {
+        setTokenForm((prev) => ({ ...prev, patientName: spoken }));
+      } else if (field === 'diagnosis') {
+        setRxForm((prev) => ({
+          ...prev,
+          diagnosis: prev.diagnosis ? `${prev.diagnosis}, ${spoken}` : spoken,
+        }));
+      } else if (field === 'customMed') {
+        setCustomMedInput(spoken);
+        setSelectedMedName('');
+      }
+      setActiveMicField('');
     };
-    recognition.onerror = () => setListeningVoice(false);
-    recognition.onend = () => setListeningVoice(false);
+    recognition.onerror = () => setActiveMicField('');
+    recognition.onend = () => setActiveMicField('');
     recognition.start();
   };
 
@@ -197,6 +237,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
 
   const selectPatientForDoctor = async (tok) => {
     setSelectedTokenId(tok._id);
+    setRxSavedSuccess(false);
     setRxForm({
       bp: tok.vitals?.bp || '',
       temp: tok.vitals?.temp || '',
@@ -204,7 +245,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
       weight: tok.vitals?.weight || '',
       diagnosis: tok.diagnosis || '',
       prescription: tok.prescription || [],
-      followUpDays: tok.followUpDays || 5,
+      followUpDays: tok.followUpDays || 3,
     });
     setHistoryPhone(tok.patientPhone);
     try {
@@ -224,32 +265,34 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     } catch (_) {}
   };
 
-  const togglePresetMedicine = (med) => {
-    setRxForm((prev) => {
-      const exists = prev.prescription.includes(med);
-      return {
-        ...prev,
-        prescription: exists
-          ? prev.prescription.filter((m) => m !== med)
-          : [...prev.prescription, med],
-      };
-    });
-  };
-
-  const addCustomMedicine = () => {
-    if (!customMed.trim()) return;
+  const handleAddBuiltMedicine = () => {
+    const medBase = customMedInput.trim() || selectedMedName;
+    if (!medBase) return;
+    const formattedLine = `${medBase} — ${selectedTiming} — ${medDays} ${
+      medDays === 1 ? 'Day' : 'Days'
+    }`;
     setRxForm((prev) => ({
       ...prev,
-      prescription: [...prev.prescription, customMed.trim()],
+      prescription: [...prev.prescription, formattedLine],
     }));
-    setCustomMed('');
+    setCustomMedInput('');
+    setRxSavedSuccess(false);
+  };
+
+  const removePrescriptionItem = (idx) => {
+    setRxForm((prev) => ({
+      ...prev,
+      prescription: prev.prescription.filter((_, i) => i !== idx),
+    }));
+    setRxSavedSuccess(false);
   };
 
   const handleSaveDoctorRx = async () => {
     if (!selectedTokenId) return;
     setSavingRx(true);
+    setRxSavedSuccess(false);
     try {
-      await API.put(`/clinic/tokens/${selectedTokenId}`, {
+      const { data: updatedToken } = await API.put(`/clinic/tokens/${selectedTokenId}`, {
         status: 'Completed',
         vitals: {
           bp: rxForm.bp,
@@ -261,7 +304,20 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
         prescription: rxForm.prescription,
         followUpDays: Number(rxForm.followUpDays) || 0,
       });
-      await refreshAll();
+
+      setTokens((prev) =>
+        prev.map((t) => (t._id === selectedTokenId ? updatedToken : t))
+      );
+
+      if (updatedToken?.patientPhone) {
+        const histRes = await API.get(`/clinic/history/${updatedToken.patientPhone}`);
+        setPatientHistory(histRes.data.visits || []);
+      }
+
+      setRxSavedSuccess(true);
+      refreshAll();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Could not save visit. Please check connection.');
     } finally {
       setSavingRx(false);
     }
@@ -277,10 +333,16 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
   };
 
-  const buildWhatsAppFollowUpUrl = (tok) => {
+  const buildWhatsAppRxUrl = (tok) => {
     let digits = (tok.patientPhone || '').replace(/\D/g, '');
     if (digits.startsWith('0')) digits = `92${digits.slice(1)}`;
-    const text = `Assalam-o-Alaikum ${tok.patientName},\nReminder from *${clinic.clinicName}* (${clinic.doctorName}): Your follow-up checkup is due. Please bring your mobile number for instant record lookup.`;
+    const medsList =
+      rxForm.prescription.length > 0
+        ? rxForm.prescription.map((m, i) => `${i + 1}. ${m}`).join('\n')
+        : 'Follow doctor advice.';
+    const text = `Assalam-o-Alaikum ${tok.patientName},\n*${clinic.clinicName}* (${clinic.doctorName})\n${
+      rxForm.diagnosis ? `Diagnosis: ${rxForm.diagnosis}\n` : ''
+    }*Prescription / دوائیاں:*\n${medsList}\nFollow-up after ${medDays} days.`;
     return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
   };
 
@@ -308,6 +370,15 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     const nextQty = Math.max(0, (item.stockQty || 0) + delta);
     const { data } = await API.put(`/clinic/dispensary/${item._id}`, { stockQty: nextQty });
     setStockItems((prev) => prev.map((i) => (i._id === item._id ? data : i)));
+  };
+
+  const handleDeleteStockItem = async (item) => {
+    try {
+      await API.delete(`/clinic/dispensary/${item._id}`);
+      setStockItems((prev) => prev.filter((i) => i._id !== item._id));
+    } catch (_) {
+      alert('Could not delete item.');
+    }
   };
 
   const lowStockCount = stockItems.filter((i) => i.stockQty <= i.lowStockThreshold).length;
@@ -395,10 +466,10 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                     />
                     <button
                       type="button"
-                      onClick={startVoiceNameInput}
+                      onClick={() => startVoiceInput('patientName')}
                       title="Speak Patient Name"
                       className={`px-3.5 rounded-xl border flex items-center justify-center cursor-pointer ${
-                        listeningVoice
+                        activeMicField === 'patientName'
                           ? 'bg-red-600 text-white border-red-600 animate-pulse'
                           : 'bg-teal-50 text-teal-800 border-teal-200'
                       }`}
@@ -639,89 +710,202 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                 />
               </div>
 
-              <input
-                type="text"
-                placeholder="Diagnosis / Clinical Note (e.g. Acute Viral Pharyngitis)"
-                value={rxForm.diagnosis}
-                onChange={(e) => setRxForm({ ...rxForm, diagnosis: e.target.value })}
-                className="w-full h-11 px-3.5 rounded-xl bg-slate-50 border border-slate-300 text-sm"
-              />
+              {/* Diagnosis with Voice Mic */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Diagnosis / Clinical Note (e.g. Viral Fever & Throat)"
+                  value={rxForm.diagnosis}
+                  onChange={(e) => setRxForm({ ...rxForm, diagnosis: e.target.value })}
+                  className="flex-1 h-11 px-3.5 rounded-xl bg-slate-50 border border-slate-300 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => startVoiceInput('diagnosis')}
+                  title="Speak Diagnosis"
+                  className={`px-3.5 rounded-xl border flex items-center justify-center cursor-pointer ${
+                    activeMicField === 'diagnosis'
+                      ? 'bg-red-600 text-white border-red-600 animate-pulse'
+                      : 'bg-teal-50 text-teal-800 border-teal-200'
+                  }`}
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+              </div>
 
-              {/* 1-Tap Preset Medicines */}
-              <div>
-                <div className="text-xs font-bold text-slate-700 mb-2">
-                  1-Tap Clinic Medicines (Tap to Add/Remove):
+              {/* STEP A: Clean Medicine Name Selection */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="text-xs font-bold text-slate-800">
+                  1. Select Medicine Name / دوا کا نام منتخب کریں:
                 </div>
                 <div className="flex flex-wrap gap-1.5">
-                  {(clinic.presetMedicines || []).map((med) => {
-                    const active = rxForm.prescription.includes(med);
+                  {CLEAN_MEDICINE_NAMES.map((med) => {
+                    const isPicked = selectedMedName === med && !customMedInput;
                     return (
                       <button
                         key={med}
                         type="button"
-                        onClick={() => togglePresetMedicine(med)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border text-left transition cursor-pointer ${
-                          active
+                        onClick={() => {
+                          setSelectedMedName(med);
+                          setCustomMedInput('');
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                          isPicked
                             ? 'bg-teal-700 text-white border-teal-700'
-                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-teal-500'
+                            : 'bg-white text-slate-700 border-slate-200 hover:border-teal-500'
                         }`}
                       >
-                        {active ? '✓ ' : '+ '}
                         {med}
                       </button>
                     );
                   })}
                 </div>
+
+                {/* Custom Medicine + Mic */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Or type / speak any other medicine name..."
+                    value={customMedInput}
+                    onChange={(e) => setCustomMedInput(e.target.value)}
+                    className="flex-1 h-10 px-3 rounded-xl bg-white border border-slate-300 text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => startVoiceInput('customMed')}
+                    title="Speak Medicine Name"
+                    className={`px-3 rounded-xl border flex items-center justify-center cursor-pointer ${
+                      activeMicField === 'customMed'
+                        ? 'bg-red-600 text-white border-red-600 animate-pulse'
+                        : 'bg-white text-teal-800 border-slate-300'
+                    }`}
+                  >
+                    <Mic className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* STEP B: Timing / Khurak Filter Buttons */}
+                <div className="pt-1">
+                  <div className="text-xs font-bold text-slate-800 mb-1.5">
+                    2. Khurak / Timing (خوراک):
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {DOSAGE_SCHEDULES.map((sch) => (
+                      <button
+                        key={sch.id}
+                        type="button"
+                        onClick={() => setSelectedTiming(sch.label)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer ${
+                          selectedTiming === sch.label
+                            ? 'bg-amber-600 text-white border-amber-600'
+                            : 'bg-white text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        {sch.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* STEP C: - Day + Counter & Add Button */}
+                <div className="pt-1 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-800">3. Days (دن):</span>
+                    <div className="inline-flex items-center bg-white border border-slate-300 rounded-xl overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setMedDays((d) => Math.max(1, d - 1))}
+                        className="w-9 h-9 font-extrabold text-base text-slate-700 hover:bg-slate-100 cursor-pointer"
+                      >
+                        -
+                      </button>
+                      <span className="px-3 text-xs font-extrabold text-teal-800 tabular-nums">
+                        {medDays} {medDays === 1 ? 'Day' : 'Days'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setMedDays((d) => d + 1)}
+                        className="w-9 h-9 font-extrabold text-base text-teal-700 hover:bg-teal-50 cursor-pointer"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddBuiltMedicine}
+                    className="px-4 h-10 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" /> Add Medicine to Parchi
+                  </button>
+                </div>
               </div>
 
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Add custom medicine..."
-                  value={customMed}
-                  onChange={(e) => setCustomMed(e.target.value)}
-                  className="flex-1 h-10 px-3 rounded-xl bg-slate-50 border border-slate-300 text-xs"
-                />
-                <button
-                  type="button"
-                  onClick={addCustomMedicine}
-                  className="px-4 rounded-xl bg-slate-900 text-white text-xs font-bold cursor-pointer"
-                >
-                  Add
-                </button>
-              </div>
-
+              {/* Selected Prescription Box */}
               {rxForm.prescription.length > 0 && (
-                <div className="p-3.5 rounded-xl bg-teal-50/70 border border-teal-200 space-y-1">
+                <div className="p-3.5 rounded-xl bg-teal-50/80 border border-teal-200 space-y-2">
                   <div className="text-[11px] font-bold text-teal-900 uppercase">
                     Selected Prescription ({rxForm.prescription.length}):
                   </div>
                   {rxForm.prescription.map((m, i) => (
-                    <div key={i} className="text-xs text-slate-800">
-                      {i + 1}. {m}
+                    <div
+                      key={i}
+                      className="flex items-center justify-between gap-2 text-xs text-slate-800 bg-white/80 px-2.5 py-1.5 rounded-lg"
+                    >
+                      <span>
+                        <strong>{i + 1}.</strong> {m}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removePrescriptionItem(i)}
+                        className="text-red-600 hover:text-red-800 p-0.5 cursor-pointer"
+                        title="Remove"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   ))}
                 </div>
               )}
 
-              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+              {/* Visible Saved Confirmation Banner */}
+              {rxSavedSuccess && (
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs font-bold flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    Saved! Visit &amp; medicines are permanently stored in Patient History.
+                  </span>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <button
                   type="button"
                   disabled={savingRx || !selectedTokenId}
                   onClick={handleSaveDoctorRx}
-                  className="flex-1 h-11 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm flex items-center justify-center gap-2 cursor-pointer"
+                  className={`flex-1 h-11 rounded-xl text-white font-bold text-sm flex items-center justify-center gap-2 transition cursor-pointer ${
+                    rxSavedSuccess
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : 'bg-teal-700 hover:bg-teal-800'
+                  }`}
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  {savingRx ? 'Saving Record...' : 'Complete Visit & Save to History'}
+                  {savingRx
+                    ? 'Saving Visit...'
+                    : rxSavedSuccess
+                    ? 'Saved to History ✓'
+                    : 'Complete Visit & Save to History'}
                 </button>
+
                 {activePatientToken && (
                   <a
-                    href={buildWhatsAppFollowUpUrl(activePatientToken)}
+                    href={buildWhatsAppRxUrl(activePatientToken)}
                     target="_blank"
                     rel="noreferrer"
-                    className="h-11 px-4 rounded-xl bg-emerald-600 text-white text-xs font-bold flex items-center gap-1.5"
+                    className="h-11 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5"
                   >
-                    <MessageCircle className="w-4 h-4" /> Follow-Up Reminder
+                    <MessageCircle className="w-4 h-4" /> Send Rx on WhatsApp
                   </a>
                 )}
               </div>
@@ -754,7 +938,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                 </button>
               </form>
 
-              <div className="space-y-3 max-h-[420px] overflow-y-auto">
+              <div className="space-y-3 max-h-[460px] overflow-y-auto">
                 {patientHistory.length === 0 ? (
                   <p className="text-xs text-slate-500 py-6 text-center">
                     No prior visits found for this number yet. Completed visits appear here automatically.
@@ -765,10 +949,21 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                       key={v._id}
                       className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-xs"
                     >
-                      <div className="flex justify-between font-bold text-slate-900">
-                        <span>{v.dateKey} • Token #{v.tokenNumber}</span>
-                        <span className="text-teal-700">{v.complaint}</span>
+                      <div className="flex items-center justify-between font-bold text-slate-900">
+                        <span>
+                          {v.dateKey} • Token #{v.tokenNumber}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] ${
+                            v.status === 'Completed'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {v.status}
+                        </span>
                       </div>
+                      <div className="text-[11px] font-semibold text-teal-700">{v.complaint}</div>
                       {(v.vitals?.bp || v.vitals?.temp || v.vitals?.sugar) && (
                         <div className="text-[11px] text-slate-600">
                           BP: {v.vitals.bp || '-'} | Temp: {v.vitals.temp || '-'} | Sugar:{' '}
@@ -778,12 +973,16 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                       {v.diagnosis && (
                         <div className="font-semibold text-slate-800">Dx: {v.diagnosis}</div>
                       )}
-                      {v.prescription?.length > 0 && (
-                        <ul className="list-disc list-inside text-[11px] text-slate-600">
+                      {v.prescription?.length > 0 ? (
+                        <ul className="list-disc list-inside text-[11px] text-slate-700 pt-1 border-t border-slate-200/80">
                           {v.prescription.map((med, idx) => (
                             <li key={idx}>{med}</li>
                           ))}
                         </ul>
+                      ) : (
+                        <div className="text-[11px] text-slate-400 italic">
+                          No medicines saved on this visit yet.
+                        </div>
                       )}
                     </div>
                   ))
@@ -866,7 +1065,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
           </div>
         )}
 
-        {/* TAB 4: DISPENSARY STOCK & EXPIRY RED ALERTS */}
+        {/* TAB 4: DISPENSARY STOCK & DELETE CARD OPTION */}
         {tab === 'stock' && (
           <div className="space-y-6">
             <form
@@ -913,11 +1112,21 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                         </span>
                         <h4 className="font-bold text-slate-900 text-sm">{item.itemName}</h4>
                       </div>
-                      {isLow && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-extrabold">
-                          <AlertTriangle className="w-3 h-3" /> LOW STOCK
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {isLow && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-extrabold">
+                            <AlertTriangle className="w-3 h-3" /> LOW STOCK
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteStockItem(item)}
+                          title="Delete Card"
+                          className="p-1.5 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                     <div className="flex items-center justify-between pt-2 border-t border-slate-100">
                       <span className="text-xs text-slate-600">

@@ -146,4 +146,13 @@ router.put('/dispensary/:id', requireClinicAuth, async (req, res) => {
   }
 });
 
+router.delete('/dispensary/:id', requireClinicAuth, async (req, res) => {
+  try {
+    await DispensaryItem.findOneAndDelete({ _id: req.params.id, clinicId: req.clinicId });
+    res.json({ deleted: true, id: req.params.id });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to delete stock item.' });
+  }
+});
+
 export default router;
