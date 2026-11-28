@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import LandingPage from './components/LandingPage';
 import ClinicWorkspace from './components/ClinicWorkspace';
+import PublicBookingPage from './components/PublicBookingPage';
 import API from './api';
 
 export default function App() {
+  const params = new URLSearchParams(window.location.search);
+  const publicBookClinicId = params.get('book');
+
   const [clinic, setClinic] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('clinicflow_clinic') || 'null');
@@ -13,6 +17,7 @@ export default function App() {
   });
 
   useEffect(() => {
+    if (publicBookClinicId) return;
     const token = localStorage.getItem('clinicflow_token');
     if (token && navigator.onLine) {
       API.get('/auth/me')
@@ -26,7 +31,11 @@ export default function App() {
           setClinic(null);
         });
     }
-  }, []);
+  }, [publicBookClinicId]);
+
+  if (publicBookClinicId) {
+    return <PublicBookingPage clinicId={publicBookClinicId} />;
+  }
 
   const handleLogout = () => {
     localStorage.removeItem('clinicflow_token');

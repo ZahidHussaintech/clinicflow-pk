@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://clinic.zahidhussainofficial.com/sitemap.xml

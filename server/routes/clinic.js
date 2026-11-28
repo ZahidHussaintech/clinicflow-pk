@@ -11,6 +11,74 @@ function getTodayPKT() {
   return pkt.toISOString().slice(0, 10);
 }
 
+// PUBLIC: Patient Online Token Booking Info (No Login Required)
+router.get('/public/:clinicId', async (req, res) => {
+  try {
+    const clinic = await ClinicUser.findById(req.params.clinicId).select(
+      'clinicName doctorName areaSector defaultFeeRs'
+    );
+    if (!clinic) return res.status(404).json({ message: 'Clinic link not found.' });
+
+    const dateKey = getTodayPKT();
+    const tokens = await PatientToken.find({ clinicId: clinic._id, dateKey });
+    const waitingCount = tokens.filter((t) => t.status === 'Waiting').length;
+    const nextTokenNumber = tokens.length > 0 ? Math.max(...tokens.map((t) => t.tokenNumber)) + 1 : 1;
+
+    res.json({
+      clinic,
+      dateKey,
+      waitingCount,
+      nextTokenNumber,
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Unable to load clinic booking page.' });
+  }
+});
+
+// PUBLIC: Patient Books Token From Home (No Login Required)
+router.post('/public/:clinicId/book', async (req, res) => {
+  try {
+    const { patientName, patientPhone, complaint } = req.body;
+    if (!patientName || !patientPhone) {
+      return res.status(400).json({ message: 'Name and mobile number are required.' });
+    }
+
+    const clinic = await ClinicUser.findById(req.params.clinicId);
+    if (!clinic) return res.status(404).json({ message: 'Clinic not found.' });
+
+    const dateKey = getTodayPKT();
+    const lastToken = await PatientToken.findOne({ clinicId: clinic._id, dateKey }).sort({ tokenNumber: -1 });
+    const nextNumber = lastToken ? lastToken.tokenNumber + 1 : 1;
+    const waitingAhead = await PatientToken.countDocuments({
+      clinicId: clinic._id,
+      dateKey,
+      status: 'Waiting',
+    });
+
+    const created = await PatientToken.create({
+      clinicId: clinic._id,
+      dateKey,
+      tokenNumber: nextNumber,
+      patientName: patientName.trim(),
+      patientPhone: patientPhone.replace(/\s+/g, ''),
+      complaint: complaint || 'Online Booking',
+      consultationFeeRs: clinic.defaultFeeRs ?? 400,
+      procedureFeeRs: 0,
+      procedureNote: 'Booked Online From Home',
+    });
+
+    res.status(201).json({
+      token: created,
+      waitingAhead,
+      clinicName: clinic.clinicName,
+      areaSector: clinic.areaSector,
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Online booking failed.', error: err.message });
+  }
+});
+
+// PROTECTED: Get Queue & Cash Summary for Selected Date (or Today) + All-Time Totals
 router.get('/today', requireClinicAuth, async (req, res) => {
   try {
     const dateKey = req.query.date || getTodayPKT();
@@ -23,8 +91,18 @@ router.get('/today', requireClinicAuth, async (req, res) => {
     const totalProcedureRs = tokens.reduce((sum, t) => sum + (t.procedureFeeRs || 0), 0);
     const grandTotalRs = totalConsultationRs + totalProcedureRs;
 
+    const allTokens = await PatientToken.find({ clinicId: req.clinicId }).select(
+      'consultationFeeRs procedureFeeRs dateKey'
+    );
+    const allTimePatients = allTokens.length;
+    const allTimeRevenueRs = allTokens.reduce(
+      (sum, t) => sum + (t.consultationFeeRs || 0) + (t.procedureFeeRs || 0),
+      0
+    );
+
     res.json({
       dateKey,
+      todayPKT: getTodayPKT(),
       tokens,
       summary: {
         totalPatients,
@@ -33,10 +111,12 @@ router.get('/today', requireClinicAuth, async (req, res) => {
         totalConsultationRs,
         totalProcedureRs,
         grandTotalRs,
+        allTimePatients,
+        allTimeRevenueRs,
       },
     });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to load today queue.', error: err.message });
+    res.status(500).json({ message: 'Failed to load queue.', error: err.message });
   }
 });
 
@@ -90,7 +170,6 @@ router.put('/tokens/:id', requireClinicAuth, async (req, res) => {
     const incomingIds = Array.isArray(req.body.dispensedItemIds) ? req.body.dispensedItemIds : [];
     const alreadyDeducted = Array.isArray(existing.dispensedItemIds) ? existing.dispensedItemIds : [];
 
-    // Only deduct items that were newly added to this visit
     const newlyAddedIds = incomingIds.filter((id) => !alreadyDeducted.includes(id));
     for (const itemId of newlyAddedIds) {
       await DispensaryItem.findOneAndUpdate(
@@ -120,7 +199,7 @@ router.get('/history/:phone', requireClinicAuth, async (req, res) => {
       patientPhone: { $regex: cleanPhone.slice(-10) },
     })
       .sort({ createdAt: -1 })
-      .limit(15);
+      .limit(20);
 
     res.json({ phone: cleanPhone, visits });
   } catch (err) {

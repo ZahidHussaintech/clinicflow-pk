@@ -80,6 +80,8 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
   const [tab, setTab] = useState('counter');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [loading, setLoading] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(() => new Date(Date.now() + 5 * 3600 * 1000).toISOString().slice(0, 10));
+  const [copiedBookingLink, setCopiedBookingLink] = useState(false);
 
   const [tokens, setTokens] = useState([]);
   const [summary, setSummary] = useState({
@@ -165,7 +167,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     setLoading(true);
     try {
       const [todayRes, stockRes] = await Promise.all([
-        API.get('/clinic/today'),
+        API.get(`/clinic/today?date=${selectedDate}`),
         API.get('/clinic/dispensary'),
       ]);
       const list = todayRes.data.tokens || [];
@@ -617,11 +619,15 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
             {/* Live Today Queue */}
             <div className="lg:col-span-7 space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-bold text-slate-800">
-                  Today&apos;s Live Queue ({tokens.length} Patients)
-                </h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm font-bold text-slate-800">Queue ({tokens.length})</h2>
+                  <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="h-8 px-2 rounded-lg bg-white border border-slate-300 text-xs font-semibold" />
+                  <button type="button" onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/?book=${clinic.id}`); setCopiedBookingLink(true); setTimeout(() => setCopiedBookingLink(false), 2500); }} className="h-8 px-2.5 rounded-lg bg-teal-50 border border-teal-300 text-teal-800 text-[11px] font-bold cursor-pointer">
+                    {copiedBookingLink ? "Copied Online Link ✓" : "Copy Ghar-Se-Token Link"}
+                  </button>
+                </div>
                 <span className="text-xs font-bold text-teal-700 tabular-nums">
-                  Collected: Rs. {summary.grandTotalRs.toLocaleString()}
+                  Date: {selectedDate} • Rs. {summary.grandTotalRs.toLocaleString()}
                 </span>
               </div>
 
@@ -1150,9 +1156,10 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
             </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl p-5 overflow-x-auto">
-              <h3 className="text-sm font-bold text-slate-900 mb-3">
-                Token-by-Token Cash Audit Log
-              </h3>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <h3 className="text-sm font-bold text-slate-900">Cash Audit Log ({selectedDate}) • All-Time: {summary.allTimePatients || 0} Patients / Rs. {(summary.allTimeRevenueRs || 0).toLocaleString()}</h3>
+                <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="h-8 px-2.5 rounded-lg bg-slate-50 border border-slate-300 text-xs font-semibold" />
+              </div>
               <table className="w-full text-left text-xs">
                 <thead className="border-b border-slate-200 text-slate-500 uppercase">
                   <tr>
