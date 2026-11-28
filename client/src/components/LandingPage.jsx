@@ -21,6 +21,8 @@ export default function LandingPage({ onAuthSuccess }) {
   const [authModal, setAuthModal] = useState(null); // 'login' | 'register' | null
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [infoMsg, setInfoMsg] = useState('');
+  const [resetForm, setResetForm] = useState({ phone: '', masterKey: '', newPassword: '' });
 
   // Interactive Sandbox Demo State (for visitors on landing page)
   const [demoToken, setDemoToken] = useState(14);
@@ -517,7 +519,7 @@ export default function LandingPage({ onAuthSuccess }) {
                 {authModal === 'register' ? '7-Day Free Clinic Setup' : 'Welcome Back Doctor'}
               </span>
               <h3 className="text-2xl font-extrabold text-slate-900 mt-1">
-                {authModal === 'register' ? 'Create Your Clinic Workspace' : 'Sign In to ClinicFlow PK'}
+                {authModal === 'register' ? 'Create Your Clinic Workspace' : authModal === 'forgot' ? 'Reset Clinic Password' : 'Sign In to ClinicFlow PK'}
               </h3>
             </div>
 
@@ -527,6 +529,72 @@ export default function LandingPage({ onAuthSuccess }) {
               </div>
             )}
 
+            {infoMsg && (
+              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium">
+                {infoMsg}
+              </div>
+            )}
+
+            {authModal === 'forgot' ? (
+              <div className="space-y-3.5">
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  <strong>Doctors / Compounders:</strong> Enter your registered mobile number and tap WhatsApp Support below—we will reset your password within 2 minutes.
+                </p>
+                <input
+                  type="tel"
+                  placeholder="Registered Mobile Number (0300...)"
+                  value={resetForm.phone}
+                  onChange={(e) => setResetForm({ ...resetForm, phone: e.target.value })}
+                  className="w-full h-11 px-3.5 rounded-xl bg-slate-50 border border-slate-300 text-sm"
+                />
+                <a
+                  href={`https://wa.me/923379814592?text=${encodeURIComponent(`Assalam-o-Alaikum Zahid bhai, please reset my ClinicFlow PK password for mobile: ${resetForm.phone || "My Clinic"}`)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2"
+                >
+                  Request Instant Reset on WhatsApp
+                </a>
+
+                <div className="border-t border-slate-200 pt-3 space-y-2.5">
+                  <div className="text-[11px] font-bold uppercase text-slate-500">
+                    Or Reset Instantly Using Master Recovery Key:
+                  </div>
+                  <input
+                    type="password"
+                    placeholder="Master Recovery Key"
+                    value={resetForm.masterKey}
+                    onChange={(e) => setResetForm({ ...resetForm, masterKey: e.target.value })}
+                    className="w-full h-10 px-3.5 rounded-xl bg-slate-50 border border-slate-300 text-xs"
+                  />
+                  <input
+                    type="password"
+                    placeholder="New Password"
+                    value={resetForm.newPassword}
+                    onChange={(e) => setResetForm({ ...resetForm, newPassword: e.target.value })}
+                    className="w-full h-10 px-3.5 rounded-xl bg-slate-50 border border-slate-300 text-xs"
+                  />
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={async () => {
+                      setLoading(true); setError(''); setInfoMsg('');
+                      try {
+                        const { data } = await API.post('/auth/reset-with-master-key', resetForm);
+                        setInfoMsg(data.message);
+                        setForm({ ...form, phone: resetForm.phone, password: '' });
+                        setAuthModal('login');
+                      } catch (err) {
+                        setError(err.response?.data?.message || 'Reset failed.');
+                      } finally { setLoading(false); }
+                    }}
+                    className="w-full h-10 rounded-xl bg-slate-900 text-white font-bold text-xs cursor-pointer"
+                  >
+                    {loading ? 'Updating...' : 'Reset Password with Master Key'}
+                  </button>
+                </div>
+              </div>
+            ) : (
             <form onSubmit={handleAuthSubmit} className="space-y-3.5">
               {authModal === 'register' && (
                 <>
@@ -594,6 +662,19 @@ export default function LandingPage({ onAuthSuccess }) {
                   : 'Open Clinic Dashboard'}
               </button>
             </form>
+            )}
+
+            {authModal === 'login' && (
+              <div className="flex justify-end -mt-1">
+                <button
+                  type="button"
+                  onClick={() => { setError(''); setInfoMsg(''); setResetForm({ ...resetForm, phone: form.phone }); setAuthModal('forgot'); }}
+                  className="text-xs font-semibold text-teal-700 hover:underline cursor-pointer"
+                >
+                  Forgot Password?
+                </button>
+              </div>
+            )}
 
             <div className="text-center text-xs text-slate-500">
               {authModal === 'register' ? (
