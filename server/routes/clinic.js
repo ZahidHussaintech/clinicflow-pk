@@ -11,31 +11,24 @@ function getTodayPKT() {
   return pkt.toISOString().slice(0, 10);
 }
 
-// PUBLIC: Patient Online Token Booking Info (No Login Required)
 router.get('/public/:clinicId', async (req, res) => {
   try {
-    const clinic = await ClinicUser.findById(req.params.clinicId).select(
-      'clinicName doctorName areaSector defaultFeeRs'
-    );
+    const dateKey = getTodayPKT();
+    const [clinic, tokens] = await Promise.all([
+      ClinicUser.findById(req.params.clinicId).select('clinicName doctorName areaSector defaultFeeRs').lean(),
+      PatientToken.find({ clinicId: req.params.clinicId, dateKey }).select('status tokenNumber').lean(),
+    ]);
     if (!clinic) return res.status(404).json({ message: 'Clinic link not found.' });
 
-    const dateKey = getTodayPKT();
-    const tokens = await PatientToken.find({ clinicId: clinic._id, dateKey });
     const waitingCount = tokens.filter((t) => t.status === 'Waiting').length;
     const nextTokenNumber = tokens.length > 0 ? Math.max(...tokens.map((t) => t.tokenNumber)) + 1 : 1;
 
-    res.json({
-      clinic,
-      dateKey,
-      waitingCount,
-      nextTokenNumber,
-    });
+    res.json({ clinic, dateKey, waitingCount, nextTokenNumber });
   } catch (err) {
     res.status(500).json({ message: 'Unable to load clinic booking page.' });
   }
 });
 
-// PUBLIC: Patient Books Token From Home (No Login Required)
 router.post('/public/:clinicId/book', async (req, res) => {
   try {
     const { patientName, patientPhone, complaint } = req.body;
@@ -43,18 +36,15 @@ router.post('/public/:clinicId/book', async (req, res) => {
       return res.status(400).json({ message: 'Name and mobile number are required.' });
     }
 
-    const clinic = await ClinicUser.findById(req.params.clinicId);
+    const dateKey = getTodayPKT();
+    const [clinic, lastToken, waitingAhead] = await Promise.all([
+      ClinicUser.findById(req.params.clinicId).lean(),
+      PatientToken.findOne({ clinicId: req.params.clinicId, dateKey }).sort({ tokenNumber: -1 }).lean(),
+      PatientToken.countDocuments({ clinicId: req.params.clinicId, dateKey, status: 'Waiting' }),
+    ]);
     if (!clinic) return res.status(404).json({ message: 'Clinic not found.' });
 
-    const dateKey = getTodayPKT();
-    const lastToken = await PatientToken.findOne({ clinicId: clinic._id, dateKey }).sort({ tokenNumber: -1 });
     const nextNumber = lastToken ? lastToken.tokenNumber + 1 : 1;
-    const waitingAhead = await PatientToken.countDocuments({
-      clinicId: clinic._id,
-      dateKey,
-      status: 'Waiting',
-    });
-
     const created = await PatientToken.create({
       clinicId: clinic._id,
       dateKey,
@@ -78,11 +68,15 @@ router.post('/public/:clinicId/book', async (req, res) => {
   }
 });
 
-// PROTECTED: Get Queue & Cash Summary for Selected Date (or Today) + All-Time Totals
 router.get('/today', requireClinicAuth, async (req, res) => {
   try {
-    const dateKey = req.query.date || getTodayPKT();
-    const tokens = await PatientToken.find({ clinicId: req.clinicId, dateKey }).sort({ tokenNumber: 1 });
+    const todayPKT = getTodayPKT();
+    const dateKey = req.query.date || todayPKT;
+
+    const [tokens, allTokens] = await Promise.all([
+      PatientToken.find({ clinicId: req.clinicId, dateKey }).sort({ tokenNumber: 1 }).lean(),
+      PatientToken.find({ clinicId: req.clinicId }).select('consultationFeeRs procedureFeeRs').lean(),
+    ]);
 
     const totalPatients = tokens.length;
     const waitingCount = tokens.filter((t) => t.status === 'Waiting').length;
@@ -91,9 +85,6 @@ router.get('/today', requireClinicAuth, async (req, res) => {
     const totalProcedureRs = tokens.reduce((sum, t) => sum + (t.procedureFeeRs || 0), 0);
     const grandTotalRs = totalConsultationRs + totalProcedureRs;
 
-    const allTokens = await PatientToken.find({ clinicId: req.clinicId }).select(
-      'consultationFeeRs procedureFeeRs dateKey'
-    );
     const allTimePatients = allTokens.length;
     const allTimeRevenueRs = allTokens.reduce(
       (sum, t) => sum + (t.consultationFeeRs || 0) + (t.procedureFeeRs || 0),
@@ -102,7 +93,7 @@ router.get('/today', requireClinicAuth, async (req, res) => {
 
     res.json({
       dateKey,
-      todayPKT: getTodayPKT(),
+      todayPKT,
       tokens,
       summary: {
         totalPatients,
@@ -137,10 +128,11 @@ router.post('/tokens', requireClinicAuth, async (req, res) => {
     }
 
     const dateKey = getTodayPKT();
-    const lastToken = await PatientToken.findOne({ clinicId: req.clinicId, dateKey }).sort({ tokenNumber: -1 });
+    const [lastToken, clinic] = await Promise.all([
+      PatientToken.findOne({ clinicId: req.clinicId, dateKey }).sort({ tokenNumber: -1 }).lean(),
+      ClinicUser.findById(req.clinicId).select('defaultFeeRs').lean(),
+    ]);
     const nextNumber = lastToken ? lastToken.tokenNumber + 1 : 1;
-
-    const clinic = await ClinicUser.findById(req.clinicId);
     const fee = consultationFeeRs !== undefined ? Number(consultationFeeRs) : clinic?.defaultFeeRs ?? 400;
 
     const created = await PatientToken.create({
@@ -164,16 +156,16 @@ router.post('/tokens', requireClinicAuth, async (req, res) => {
 
 router.put('/tokens/:id', requireClinicAuth, async (req, res) => {
   try {
-    const existing = await PatientToken.findOne({ _id: req.params.id, clinicId: req.clinicId });
+    const existing = await PatientToken.findOne({ _id: req.params.id, clinicId: req.clinicId }).lean();
     if (!existing) return res.status(404).json({ message: 'Token not found.' });
 
     const incomingIds = Array.isArray(req.body.dispensedItemIds) ? req.body.dispensedItemIds : [];
     const alreadyDeducted = Array.isArray(existing.dispensedItemIds) ? existing.dispensedItemIds : [];
 
     const newlyAddedIds = incomingIds.filter((id) => !alreadyDeducted.includes(id));
-    for (const itemId of newlyAddedIds) {
-      await DispensaryItem.findOneAndUpdate(
-        { _id: itemId, clinicId: req.clinicId, stockQty: { $gt: 0 } },
+    if (newlyAddedIds.length > 0) {
+      await DispensaryItem.updateMany(
+        { _id: { $in: newlyAddedIds }, clinicId: req.clinicId, stockQty: { $gt: 0 } },
         { $inc: { stockQty: -1 } }
       );
     }
@@ -183,11 +175,20 @@ router.put('/tokens/:id', requireClinicAuth, async (req, res) => {
       { _id: req.params.id, clinicId: req.clinicId },
       { ...req.body, dispensedItemIds: mergedIds },
       { new: true }
-    );
+    ).lean();
 
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: 'Failed to update patient record.' });
+  }
+});
+
+router.delete('/tokens/:id', requireClinicAuth, async (req, res) => {
+  try {
+    await PatientToken.findOneAndDelete({ _id: req.params.id, clinicId: req.clinicId });
+    res.json({ deleted: true, id: req.params.id });
+  } catch (err) {
+    res.status(500).json({ message: 'Failed to delete token.' });
   }
 });
 
@@ -199,7 +200,8 @@ router.get('/history/:phone', requireClinicAuth, async (req, res) => {
       patientPhone: { $regex: cleanPhone.slice(-10) },
     })
       .sort({ createdAt: -1 })
-      .limit(20);
+      .limit(20)
+      .lean();
 
     res.json({ phone: cleanPhone, visits });
   } catch (err) {
@@ -209,7 +211,7 @@ router.get('/history/:phone', requireClinicAuth, async (req, res) => {
 
 router.get('/dispensary', requireClinicAuth, async (req, res) => {
   try {
-    const items = await DispensaryItem.find({ clinicId: req.clinicId }).sort({ stockQty: 1 });
+    const items = await DispensaryItem.find({ clinicId: req.clinicId }).sort({ stockQty: 1 }).lean();
     res.json(items);
   } catch (err) {
     res.status(500).json({ message: 'Failed to load dispensary stock.' });
@@ -218,10 +220,7 @@ router.get('/dispensary', requireClinicAuth, async (req, res) => {
 
 router.post('/dispensary', requireClinicAuth, async (req, res) => {
   try {
-    const created = await DispensaryItem.create({
-      clinicId: req.clinicId,
-      ...req.body,
-    });
+    const created = await DispensaryItem.create({ clinicId: req.clinicId, ...req.body });
     res.status(201).json(created);
   } catch (err) {
     res.status(500).json({ message: 'Failed to add dispensary item.' });
@@ -234,7 +233,7 @@ router.put('/dispensary/:id', requireClinicAuth, async (req, res) => {
       { _id: req.params.id, clinicId: req.clinicId },
       req.body,
       { new: true }
-    );
+    ).lean();
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: 'Failed to update stock.' });

@@ -83,7 +83,10 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
   const [selectedDate, setSelectedDate] = useState("");
   const [copiedBookingLink, setCopiedBookingLink] = useState(false);
 
-  const [tokens, setTokens] = useState([]);
+  const [tokens, setTokens] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("clinicflow_cache_today") || "null")?.tokens || []; } catch { return []; }
+  });
+  const [issuingToken, setIssuingToken] = useState(false);
   const [summary, setSummary] = useState({
     totalPatients: 0,
     waitingCount: 0,
@@ -223,39 +226,66 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
 
   const handleIssueToken = async (e) => {
     e.preventDefault();
+    if (issuingToken) return;
     if (!tokenForm.patientName.trim() || !tokenForm.patientPhone.trim()) return;
+
+    setIssuingToken(true);
+    const snapshot = { ...tokenForm };
+    const nextNum = tokens.length > 0 ? Math.max(...tokens.map((t) => t.tokenNumber)) + 1 : 1;
+    const tempId = `temp-${Date.now()}`;
+    const optimisticToken = {
+      _id: tempId,
+      tokenNumber: nextNum,
+      ...snapshot,
+      status: 'Waiting',
+    };
+
+    // Instant 0ms UI update & form reset
+    setTokens((prev) => [...prev, optimisticToken]);
+    setPrintToken(optimisticToken);
+    setTokenForm({
+      patientName: '',
+      patientPhone: '',
+      ageGender: '',
+      complaint: 'Fever / بخار',
+      consultationFeeRs: clinic?.defaultFeeRs ?? 400,
+      procedureFeeRs: 0,
+      procedureNote: '',
+    });
 
     try {
       if (!navigator.onLine) {
         const offlineList = JSON.parse(localStorage.getItem('clinicflow_offline_tokens') || '[]');
-        offlineList.push(tokenForm);
+        offlineList.push(snapshot);
         localStorage.setItem('clinicflow_offline_tokens', JSON.stringify(offlineList));
-        const localToken = {
-          _id: `offline-${Date.now()}`,
-          tokenNumber: tokens.length + 1,
-          ...tokenForm,
-          status: 'Waiting',
-        };
-        setTokens((prev) => [...prev, localToken]);
-        setPrintToken(localToken);
       } else {
-        const { data } = await API.post('/clinic/tokens', tokenForm);
+        const { data } = await API.post('/clinic/tokens', snapshot);
         if (data.dateKey) setSelectedDate(data.dateKey);
-        setTokens((prev) => [...prev, data]);
+        setTokens((prev) => prev.map((t) => (t._id === tempId ? data : t)));
         setPrintToken(data);
         setSelectedTokenId(data._id);
+        setSummary((prev) => ({
+          ...prev,
+          totalPatients: prev.totalPatients + 1,
+          waitingCount: prev.waitingCount + 1,
+          totalConsultationRs: prev.totalConsultationRs + (data.consultationFeeRs || 0),
+          totalProcedureRs: prev.totalProcedureRs + (data.procedureFeeRs || 0),
+          grandTotalRs: prev.grandTotalRs + (data.consultationFeeRs || 0) + (data.procedureFeeRs || 0),
+        }));
       }
-      setTokenForm({
-        patientName: '',
-        patientPhone: '',
-        ageGender: '',
-        complaint: 'Fever / بخار',
-        consultationFeeRs: clinic?.defaultFeeRs ?? 400,
-        procedureFeeRs: 0,
-        procedureNote: '',
-      });
     } catch (err) {
+      setTokens((prev) => prev.filter((t) => t._id !== tempId));
+      setTokenForm(snapshot);
       alert(err.response?.data?.message || 'Could not issue token.');
+    } finally {
+      setIssuingToken(false);
+    }
+  };
+
+  const handleDeleteToken = async (tok) => {
+    setTokens((prev) => prev.filter((t) => t._id !== tok._id));
+    if (!String(tok._id).startsWith('temp-') && !String(tok._id).startsWith('offline-')) {
+      try { await API.delete(`/clinic/tokens/${tok._id}`); } catch (_) {}
     }
   };
 
@@ -611,9 +641,10 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
 
                 <button
                   type="submit"
-                  className="w-full h-12 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-sm transition cursor-pointer"
+                  disabled={issuingToken}
+                  className="w-full h-12 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-60 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-sm active:scale-[0.99] transition cursor-pointer"
                 >
-                  <Ticket className="w-4 h-4" /> Issue Token &amp; Generate Parchi
+                  <Ticket className="w-4 h-4" /> {issuingToken ? 'Generating Token...' : 'Issue Token & Generate Parchi'}
                 </button>
               </form>
             </div>
@@ -696,6 +727,14 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
                           className="px-3 py-2 rounded-xl bg-teal-700 text-white text-xs font-bold cursor-pointer"
                         >
                           Examine
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteToken(tok)}
+                          title="Delete Duplicate Token"
+                          className="p-2 rounded-xl bg-slate-100 hover:bg-red-50 text-slate-400 hover:text-red-600 cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
                     </div>
