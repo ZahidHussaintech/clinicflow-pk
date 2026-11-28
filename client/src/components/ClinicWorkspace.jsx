@@ -80,7 +80,7 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
   const [tab, setTab] = useState('counter');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [loading, setLoading] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(() => new Date(Date.now() + 5 * 3600 * 1000).toISOString().slice(0, 10));
+  const [selectedDate, setSelectedDate] = useState("");
   const [copiedBookingLink, setCopiedBookingLink] = useState(false);
 
   const [tokens, setTokens] = useState([]);
@@ -167,10 +167,11 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
     setLoading(true);
     try {
       const [todayRes, stockRes] = await Promise.all([
-        API.get(`/clinic/today?date=${selectedDate}`),
+        API.get(selectedDate ? `/clinic/today?date=${selectedDate}` : `/clinic/today`),
         API.get('/clinic/dispensary'),
       ]);
       const list = todayRes.data.tokens || [];
+      if (!selectedDate && todayRes.data.dateKey) setSelectedDate(todayRes.data.dateKey);
       setTokens(list);
       setSummary(todayRes.data.summary || summary);
       setStockItems(stockRes.data || []);
@@ -239,9 +240,10 @@ export default function ClinicWorkspace({ clinic, onLogout }) {
         setPrintToken(localToken);
       } else {
         const { data } = await API.post('/clinic/tokens', tokenForm);
+        if (data.dateKey) setSelectedDate(data.dateKey);
         setTokens((prev) => [...prev, data]);
         setPrintToken(data);
-        refreshAll();
+        setSelectedTokenId(data._id);
       }
       setTokenForm({
         patientName: '',
